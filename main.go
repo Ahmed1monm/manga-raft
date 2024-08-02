@@ -1,7 +1,11 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	raft "github.com/Ahmed1monm/manga-raft/raft"
+)
 
 func main() {
-	fmt.Println(`Manga`)
+	r := raft.NewRaft()
+	fmt.Println(r)
 }
