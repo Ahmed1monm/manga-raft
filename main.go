@@ -7,5 +7,6 @@ import (
 
 func main() {
 	r := raft.NewRaft()
-	fmt.Println(r)
+	fmt.Print(r)
+	r.Start()
 }
