@@ -1,11 +1,11 @@
-version: '1.0'
 services:
   node1:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
+    environment:
+      - NODE_ID=0
+      - PORT=50051
     networks:
       - raft-network
 
@@ -13,37 +13,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-        - "8081:8081"
+    environment:
+      - NODE_ID=1
+      - PORT=50052
     networks:
         - raft-network
 
   node3:
-      build:
-        context: .
-        dockerfile: Dockerfile
-      ports:
-        - "8082:8082"
-      networks:
-        - raft-network
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ID=2
+      - PORT=50053
+    networks:
+      - raft-network
 
-  node4:
-      build:
-        context: .
-        dockerfile: Dockerfile
-      ports:
-          - "8083:8083"
-      networks:
-          - raft-network
-
-  node5:
-      build:
-        context: .
-        dockerfile: Dockerfile
-      ports:
-          - "8083:8083"
-      networks:
-          - raft-network
 
 
 networks:

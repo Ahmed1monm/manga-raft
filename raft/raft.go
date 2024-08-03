@@ -1,8 +1,15 @@
 package raft
 
 import (
+	"context"
 	"fmt"
+	"math/rand"
+	"os"
+	"strconv"
 	"time"
+
+	pb "github.com/Ahmed1monm/manga-raft/network/raft"
+	"github.com/Ahmed1monm/manga-raft/rpc/rpc_client"
 )
 
 const (
@@ -21,8 +28,8 @@ type Config struct {
 }
 
 type LogEntry struct {
-	term    int
-	command interface{}
+	Term    int
+	Command interface{}
 }
 
 type State struct {
@@ -47,30 +54,30 @@ type Raft struct {
 }
 
 type RequestVoteArgs struct {
-	term         int
-	candidateId  int
-	lastLogIndex int
-	lastLogTerm  int
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 type RequestVoteReply struct {
-	term        int
-	voteGranted bool
+	Term        int
+	VoteGranted bool
 }
 
 type AppendEntriesArgs struct {
-	term         int
-	leaderId     int
-	prevLogIndex int
-	prevLogTerm  int
-	entries      []LogEntry
-	leaderCommit int
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []LogEntry
+	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
-	term            int
-	success         bool
-	lastCommitIndex int
+	Term            int
+	Success         bool
+	LastCommitIndex int
 }
 
 func NewRaft() *Raft {
@@ -87,26 +94,51 @@ func NewRaft() *Raft {
 	raft.nodeType = FOLLOWER
 	raft.votesReceived = 0
 
+	port, err := strconv.Atoi(os.Getenv("PORT"))
+	if err != nil {
+		fmt.Println("Error in getting port from env, defaulting to 50051")
+		port = 50051
+	}
+
+	nodeId, err := strconv.Atoi(os.Getenv("NODE_ID"))
+	if err != nil {
+		fmt.Println("Error in getting node id from env, defaulting to 0")
+		nodeId = 0
+	}
+
+	min := 50
+	max := 100
+	heartbeatInterval := rand.Intn(max-min+1) + min
+
+	raft.config = Config{
+		clusterSize:       3,
+		port:              port,
+		heartbeatInterval: heartbeatInterval,
+		electionTimeout:   300,
+		peers:             []string{"node1:50051", "node2:50052", "node3:50053"},
+		nodeId:            nodeId,
+	}
+
 	return raft
 }
 
 func (r *Raft) RequestVote(args RequestVoteArgs) (error, RequestVoteReply) {
 	reply := RequestVoteReply{}
-	reply.term = r.state.currentTerm
-	reply.voteGranted = false
+	reply.Term = r.state.currentTerm
+	reply.VoteGranted = false
 
-	if args.term < r.state.currentTerm {
-		return fmt.Errorf("RequestVote: Request term is less than current term"), reply
+	if args.Term < r.state.currentTerm {
+		return fmt.Errorf("RequestVote: Request term is less than current term %d and %d", args.Term, r.state.currentTerm), reply
 	}
 
-	if args.term > r.state.currentTerm {
-		r.state.currentTerm = args.term
+	if args.Term > r.state.currentTerm {
+		r.state.currentTerm = args.Term
 		r.state.votedFor = -1
 	}
 
-	if r.state.votedFor == -1 || r.state.votedFor == args.candidateId {
-		reply.voteGranted = true
-		r.state.votedFor = args.candidateId
+	if r.state.votedFor == -1 || r.state.votedFor == args.CandidateId {
+		reply.VoteGranted = true
+		r.state.votedFor = args.CandidateId
 	}
 
 	return nil, reply
@@ -115,26 +147,26 @@ func (r *Raft) RequestVote(args RequestVoteArgs) (error, RequestVoteReply) {
 func (r *Raft) AppendEntries(args AppendEntriesArgs) (error, AppendEntriesReply) {
 	reply := AppendEntriesReply{}
 
-	reply.term = r.state.currentTerm
-	reply.success = false
+	reply.Term = r.state.currentTerm
+	reply.Success = false
 
-	if args.term > r.state.currentTerm {
-		r.state.currentTerm = args.term
+	if args.Term > r.state.currentTerm {
+		r.state.currentTerm = args.Term
 		r.state.votedFor = -1
 		r.SwitchState("follower")
 	}
 
-	if args.term < r.state.currentTerm {
+	if args.Term < r.state.currentTerm {
 		return fmt.Errorf("AppendEntries: Request term is less than current term"), reply
 	}
 
-	if r.state.commitedIndex != args.prevLogIndex {
-		return fmt.Errorf("AppendEntries: Previous log index does not match"), reply
+	if r.state.commitedIndex != args.PrevLogIndex {
+		return fmt.Errorf("AppendEntries: Previous log index does not match, %d and %d", r.state.commitedIndex, args.PrevLogIndex), reply
 	}
 
-	r.state.log = append(r.state.log, args.entries...)
-	r.state.commitedIndex = min(args.leaderCommit, len(r.state.log)-1)
-	reply.success = true
+	r.state.log = append(r.state.log, args.Entries...)
+	r.state.commitedIndex = min(args.LeaderCommit, max(len(r.state.log)-1, 0))
+	reply.Success = true
 
 	return nil, reply
 }
@@ -147,27 +179,41 @@ func (r *Raft) StartElection() error {
 
 	lastTermIndex := 0
 	if len(r.state.log) > 0 {
-		lastTermIndex = r.state.log[len(r.state.log)-1].term
+		lastTermIndex = r.state.log[len(r.state.log)-1].Term
 	}
 
 	args := RequestVoteArgs{
-		term:         r.state.currentTerm,
-		candidateId:  r.config.nodeId,
-		lastLogIndex: len(r.state.log) - 1,
-		lastLogTerm:  lastTermIndex,
+		Term:         r.state.currentTerm,
+		CandidateId:  r.config.nodeId,
+		LastLogIndex: max(len(r.state.log)-1, 0),
+		LastLogTerm:  lastTermIndex,
 	}
 
-	for i, _ := range r.config.peers {
+	for i, addr := range r.config.peers {
 		if i == r.config.nodeId {
 			continue
 		}
 
-		err, reply := r.RequestVote(args)
+		err := rpc_client.GetClient(addr, func(ctx context.Context, c pb.RaftClient) error {
+			reply, err := c.RequestVote(ctx, &pb.RequestVoteArgs{
+				Term:         int32(args.Term),
+				CandidateId:  int32(args.CandidateId),
+				LastLogIndex: int32(args.LastLogIndex),
+				LastLogTerm:  int32(args.LastLogTerm),
+			})
+
+			if err != nil {
+				return err
+			}
+
+			if reply.VoteGranted {
+				r.votesReceived++
+			}
+			return nil
+		})
+
 		if err != nil {
 			return fmt.Errorf("Error in RequestVote: %s", err.Error())
-		}
-		if reply.voteGranted {
-			r.votesReceived++
 		}
 	}
 
@@ -181,26 +227,41 @@ func (r *Raft) StartHeartbeat() error {
 	fmt.Println("Starting heartbeat")
 	lastTermIndex := 0
 	if len(r.state.log) > 0 {
-		lastTermIndex = r.state.log[len(r.state.log)-1].term
+		lastTermIndex = r.state.log[len(r.state.log)-1].Term
 	}
 	args := AppendEntriesArgs{
-		term:         r.state.currentTerm,
-		leaderId:     r.config.nodeId,
-		prevLogIndex: len(r.state.log) - 1,
-		prevLogTerm:  lastTermIndex,
-		entries:      make([]LogEntry, 0),
-		leaderCommit: r.state.commitedIndex,
+		Term:         r.state.currentTerm,
+		LeaderId:     r.config.nodeId,
+		PrevLogIndex: max(len(r.state.log)-1, 0),
+		PrevLogTerm:  lastTermIndex,
+		Entries:      make([]LogEntry, 0),
+		LeaderCommit: r.state.commitedIndex,
 	}
 
-	for i, _ := range r.config.peers {
+	for i, addr := range r.config.peers {
 		if i == r.config.nodeId {
 			continue
 		}
 
-		err, _ := r.AppendEntries(args)
+		err := rpc_client.GetClient(addr, func(ctx context.Context, c pb.RaftClient) error {
+			_, err := c.AppendEntries(ctx, &pb.AppendEntriesArgs{
+				Term:         int32(args.Term),
+				LeaderId:     int32(args.LeaderId),
+				PrevLogIndex: int32(args.PrevLogIndex),
+				PrevLogTerm:  int32(args.PrevLogTerm),
+				Entries:      make([]*pb.LogEntry, 0),
+				LeaderCommit: int32(args.LeaderCommit),
+			})
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+
 		if err != nil {
 			return fmt.Errorf("error in AppendEntries: %s", err.Error())
 		}
+
 	}
 	return nil
 }
